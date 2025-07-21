@@ -1,0 +1,219 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>YouTube 영상 필터2</title>
+  <link rel="icon" href="data:;base64,=" />
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 1000px; margin: auto; }
+    .filter-row { margin: 12px 0; display: flex; align-items: center; flex-wrap: wrap; }
+    .filter-row label { width: 100px; font-weight: bold; }
+    .filter-row button, .filter-row input, .filter-row select { margin: 4px; }
+    .video-card { display: flex; justify-content: space-between; border: 1px solid #ddd; padding: 10px; margin: 10px 0; }
+    .video-info { flex-grow: 1; }
+    .video-thumbnail { width: 160px; margin-left: 16px; }
+    .video-thumbnail img { width: 100%; height: auto; }
+    #loadMoreBtn { display: block; margin: 20px auto; padding: 10px 20px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <h1>YouTube 영상 필터2</h1>
+
+  <div class="filter-row">
+    <label>업로드 기간:</label>
+    <button class="preset-date" data-days="30">1M</button>
+    <button class="preset-date" data-days="90">3M</button>
+    <button class="preset-date" data-days="180">6M</button>
+    <button class="preset-date" data-days="365">1Y</button>
+    <button class="preset-date" data-days="730">2Y</button>
+    <button class="preset-date" data-days="1095">3Y</button>
+    <span style="margin-left:10px;">
+      <input type="date" id="startDate"> ~ <input type="date" id="endDate">
+    </span>
+  </div>
+
+  <div class="filter-row">
+    <label>조회수:</label>
+    <button class="preset-view" data-min="1000">1천↑</button>
+    <button class="preset-view" data-min="5000">5천↑</button>
+    <button class="preset-view" data-min="10000">1만↑</button>
+    <button class="preset-view" data-min="50000">5만↑</button>
+    <button class="preset-view" data-min="100000">10만↑</button>
+    <button class="preset-view" data-min="1000000">100만↑</button>
+    <span style="margin-left:10px;">
+      <input type="number" id="minViews" placeholder="최소"> ~ <input type="number" id="maxViews" placeholder="최대">
+    </span>
+  </div>
+
+  <div class="filter-row">
+    <label>정렬 & 유형:</label>
+    <select id="sortOption">
+      <option value="date">최신순</option>
+      <option value="relevance">연관도순</option>
+      <option value="viewCount" selected>조회수순</option>
+    </select>
+    <span style="margin-left:16px;">
+      <input type="radio" name="videoType" value="all" checked> 전체
+      <input type="radio" name="videoType" value="normal" style="margin-left:8px;"> 일반영상
+      <input type="radio" name="videoType" value="shorts" style="margin-left:8px;"> 쇼츠
+    </span>
+  </div>
+
+  <div class="filter-row">
+    <label>검색어:</label>
+    <input type="text" id="searchQuery" placeholder="예: travel vlog" style="width:300px;">
+    <button onclick="applyFilters()">검색</button>
+  </div>
+
+  <div id="videoList"></div>
+  <button id="loadMoreBtn" onclick="loadMore()">더보기</button>
+
+  
+<script>
+window.applyFilters = function(reset = true) {
+  const query = document.getElementById('searchQuery').value;
+  const startDate = document.getElementById('startDate').value;
+  const endDate = document.getElementById('endDate').value;
+  const minViews = document.getElementById('minViews').value;
+  const maxViews = document.getElementById('maxViews').value;
+  const sort = document.getElementById('sortOption').value || 'viewCount';
+  const videoType = document.querySelector('input[name="videoType"]:checked').value;
+
+  currentQuery = query;
+  currentFilters = { startDate, endDate, minViews, maxViews, sort, videoType };
+  nextPageToken = '';
+
+  if (reset) document.getElementById('videoList').innerHTML = '';
+  fetchVideos(query, sort);
+};
+
+window.loadMore = function() {
+  fetchVideos(currentQuery, currentFilters.sort);
+};
+
+function getDateRange(days) {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - days);
+  return {
+    startDate: start.toISOString().split('T')[0],
+    endDate: end.toISOString().split('T')[0]
+  };
+}
+
+function parseDurationToSeconds(duration) {
+  const match = duration.match(/PT(?:(\d+)M)?(?:(\d+)S)?/);
+  const minutes = match[1] ? parseInt(match[1]) : 0;
+  const seconds = match[2] ? parseInt(match[2]) : 0;
+  return minutes * 60 + seconds;
+}
+
+function fetchVideos(query, order = 'date') {
+  let url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=50&q=${encodeURIComponent(query)}&key=${apiKey}&order=${order}`;
+  if (nextPageToken) url += `&pageToken=${nextPageToken}`;
+
+  let collected = 0;
+  let maxNeeded = 50;
+  let maxTries = 5;
+  let pageCount = 0;
+
+  function fetchNext(currentUrl) {
+    fetch(currentUrl)
+      .then(res => res.json())
+      .then(data => {
+        nextPageToken = data.nextPageToken || '';
+        const promises = data.items.map(item => {
+          const videoId = item.id.videoId;
+          return fetch(`https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${videoId}&key=${apiKey}`)
+            .then(res => res.json())
+            .then(statData => {
+              const stats = statData.items[0]?.statistics;
+              const details = statData.items[0]?.contentDetails;
+              if (!stats || !details) return null;
+              return { ...item, stats, details };
+            });
+        });
+
+        Promise.all(promises).then(videos => {
+          const list = document.getElementById('videoList');
+          for (let video of videos) {
+            if (!video) continue;
+
+            const duration = video.details.duration;
+            const durationSec = parseDurationToSeconds(duration);
+            const isShort = durationSec < 120;
+            const type = currentFilters.videoType;
+
+            if (type === 'shorts' && !isShort) continue;
+            if (type === 'normal' && isShort) continue;
+
+            const viewCount = parseInt(video.stats.viewCount || 0);
+            const likeCount = parseInt(video.stats.likeCount || 0);
+            const commentCount = parseInt(video.stats.commentCount || 0);
+
+            const min = parseInt(currentFilters.minViews || 0);
+            const max = parseInt(currentFilters.maxViews || Infinity);
+            if (viewCount < min || viewCount > max) continue;
+
+            const date = video.snippet.publishedAt.split('T')[0];
+            if (currentFilters.startDate && date < currentFilters.startDate) continue;
+            if (currentFilters.endDate && date > currentFilters.endDate) continue;
+
+            const card = document.createElement('div');
+            card.className = 'video-card';
+            card.innerHTML = `
+              <div class="video-info">
+                <div><strong>${video.snippet.title}</strong></div>
+                <div>${video.snippet.channelTitle}</div>
+                <div>조회수: ${viewCount.toLocaleString()} | 좋아요: ${likeCount.toLocaleString()} | 댓글: ${commentCount.toLocaleString()}</div>
+                <div>업로드일: ${date}</div>
+              </div>
+              <div class="video-thumbnail">
+                <a href="https://www.youtube.com/watch?v=${video.id.videoId}" target="_blank">
+                  <img src="${video.snippet.thumbnails.medium.url}" alt="썸네일">
+                </a>
+              </div>
+            `;
+            list.appendChild(card);
+            collected++;
+            if (collected >= maxNeeded) return;
+          }
+
+          if (collected < maxNeeded && nextPageToken && ++pageCount < maxTries) {
+            let nextUrl = url.split('&pageToken')[0] + `&pageToken=${nextPageToken}`;
+            fetchNext(nextUrl);
+          }
+        });
+      });
+  }
+
+  fetchNext(url);
+}
+
+const apiKey = 'AIzaSyAPhRXNNwx60WRvaT4oFZTI-EHI8uG7b88';
+let nextPageToken = '';
+let currentQuery = '';
+let currentFilters = {};
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll('.preset-date').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const days = parseInt(btn.dataset.days);
+      const range = getDateRange(days);
+      document.getElementById('startDate').value = range.startDate;
+      document.getElementById('endDate').value = range.endDate;
+    });
+  });
+
+  document.querySelectorAll('.preset-view').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('minViews').value = btn.dataset.min;
+      document.getElementById('maxViews').value = '';
+    });
+  });
+});
+</script>
+
+</body>
+</html>
